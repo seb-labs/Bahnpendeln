@@ -396,15 +396,27 @@ private fun DeparturesCard(
 
 @Composable
 private fun DepartureRow(departure: Departure) {
-    val departureTime = if (departure.delay.isBlank()) departure.time else "${departure.time} · ${departure.delay}"
+    val delayLabel = departure.delay
+        .removeSuffix(" min")
+        .ifBlank { " " }
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 2.dp),
+            .padding(vertical = 4.dp),
         verticalAlignment = Alignment.Top,
     ) {
-        Text(departureTime, fontWeight = FontWeight.Bold, modifier = Modifier.width(88.dp))
-        Text(departure.line, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold, modifier = Modifier.width(58.dp))
+        Column(modifier = Modifier.width(62.dp)) {
+            Text(departure.time, fontWeight = FontWeight.Bold)
+            Text(delayLabel, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Text(
+            compactLineLabel(departure.line),
+            color = MaterialTheme.colorScheme.primary,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.width(74.dp),
+        )
         Text(
             departure.destination.ifBlank { "Richtung unbekannt" },
             maxLines = 2,
@@ -591,6 +603,12 @@ private fun normalize(value: String): String = java.text.Normalizer.normalize(va
     .replace(Regex("\\p{Mn}+"), "")
     .lowercase(Locale.GERMAN)
     .trim()
+
+private fun compactLineLabel(line: String): String {
+    val cleaned = line.plain()
+    val match = Regex("""^([A-ZÄÖÜ]{1,4})\s+(\d+[A-Z]?)\b""").find(cleaned)
+    return match?.let { "${it.groupValues[1]} ${it.groupValues[2]}" } ?: cleaned
+}
 
 private fun String.plain(): String = replace(Regex("<[^>]+>"), " ")
     .replace("&nbsp;", " ")
