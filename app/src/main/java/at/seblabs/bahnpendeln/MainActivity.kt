@@ -55,6 +55,7 @@ import java.net.URLEncoder
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import org.json.JSONArray
 import org.json.JSONObject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -508,7 +509,20 @@ private suspend fun searchStations(query: String): List<StationSuggestion> = wit
         connection.disconnect()
     }
     val json = JSONObject(String(bytes, Charsets.UTF_8))
-    val points = json.optJSONObject("stopFinder")?.optJSONArray("points") ?: return@withContext emptyList()
+    val pointsRaw = json.optJSONObject("stopFinder")?.opt("points") ?: return@withContext emptyList()
+    val points = when (pointsRaw) {
+        is JSONArray -> pointsRaw
+        is JSONObject -> JSONArray().apply {
+            val point = pointsRaw.opt("point")
+            when (point) {
+                is JSONArray -> {
+                    for (i in 0 until point.length()) put(point.getJSONObject(i))
+                }
+                is JSONObject -> put(point)
+            }
+        }
+        else -> return@withContext emptyList()
+    }
     val q = normalize(query)
     val candidates = mutableListOf<StationSuggestion>()
     for (i in 0 until points.length()) {
