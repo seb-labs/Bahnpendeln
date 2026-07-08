@@ -44,10 +44,15 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import java.net.HttpURLConnection
 import java.net.URL
@@ -156,7 +161,27 @@ private fun BahnpendelnApp() {
         }
     }
 
+    val scrollState = rememberScrollState()
+    var pullDistance by remember { mutableStateOf(0f) }
     val pullRefreshState = rememberPullRefreshState(refreshing = liveState is LiveState.Loading, onRefresh = ::loadLive)
+    val swipeRefreshConnection = remember(scrollState, liveState, currentStation) {
+        object : NestedScrollConnection {
+            override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
+                if (source == NestedScrollSource.Drag && scrollState.value == 0 && available.y > 0f && liveState !is LiveState.Loading) {
+                    pullDistance += available.y
+                }
+                return Offset.Zero
+            }
+
+            override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
+                if (pullDistance > 96f && liveState !is LiveState.Loading) {
+                    loadLive()
+                }
+                pullDistance = 0f
+                return Velocity.Zero
+            }
+        }
+    }
 
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Box(
@@ -170,12 +195,13 @@ private fun BahnpendelnApp() {
                         )
                     )
                 )
+                .nestedScroll(swipeRefreshConnection)
                 .pullRefresh(pullRefreshState)
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .verticalScroll(rememberScrollState())
+                    .verticalScroll(scrollState)
                     .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
