@@ -93,9 +93,12 @@ private val DarkColors = darkColorScheme(
 
 data class Departure(
     val time: String,
+    val actualTime: String,
     val line: String,
     val destination: String,
     val delay: String,
+    val delayMinutes: Int,
+    val sortMinutes: Int,
 )
 
 data class StationSuggestion(
@@ -214,20 +217,7 @@ private fun StationSwitch(
     stationOne: String,
     stationTwo: String,
 ) {
-    val activeLabel = if (activeStation == 0) "Bahnhof 1" else "Bahnhof 2"
     Column(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-        ElevatedCard(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(20.dp),
-            colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
-        ) {
-            Text(
-                text = "Aktiv: $activeLabel",
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                color = MaterialTheme.colorScheme.onPrimaryContainer,
-                fontWeight = FontWeight.Bold,
-            )
-        }
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
             if (activeStation == 0) {
                 Button(onClick = { onActiveStationChange(0) }, modifier = Modifier.weight(1f)) { Text("Bahnhof 1") }
@@ -396,16 +386,18 @@ private fun DeparturesCard(
 
 @Composable
 private fun DepartureRow(departure: Departure) {
-    val delayLabel = departure.delay
-        .removeSuffix(" min")
-        .ifBlank { " " }
+    val delayLabel = when {
+        departure.delayMinutes > 0 -> "+${departure.delayMinutes} → ${departure.actualTime}"
+        departure.delayMinutes < 0 -> "${departure.delayMinutes} → ${departure.actualTime}"
+        else -> "pünktlich"
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 4.dp),
         verticalAlignment = Alignment.Top,
     ) {
-        Column(modifier = Modifier.width(62.dp)) {
+        Column(modifier = Modifier.width(92.dp)) {
             Text(departure.time, fontWeight = FontWeight.Bold)
             Text(delayLabel, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
@@ -415,7 +407,7 @@ private fun DepartureRow(departure: Departure) {
             fontWeight = FontWeight.SemiBold,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.width(74.dp),
+            modifier = Modifier.width(62.dp),
         )
         Text(
             departure.destination.ifBlank { "Richtung unbekannt" },
@@ -489,15 +481,35 @@ private fun parseDepartures(html: String): List<Departure> {
             .ifBlank { "Linie" }
         val direction = Regex("""<div class="std3_result-description"><span class="std3_sr-only">Richtung</span>(.*?)</div>""", RegexOption.DOT_MATCHES_ALL)
             .find(chunk)?.groupValues?.getOrNull(1)?.plain().orEmpty()
-        val delay = Regex("""data-delay="(-?\d+)""").find(chunk)?.groupValues?.getOrNull(1)?.toIntOrNull()?.let {
-            when {
-                it > 0 -> "+$it min"
-                it < 0 -> "$it min"
-                else -> "pünktlich"
-            }
-        }.orEmpty()
-        Departure(time = time, line = line, destination = direction, delay = delay)
-    }.take(20).toList()
+        val delayMinutes = Regex("""data-delay="(-?\d+)""").find(chunk)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
+        val delay = when {
+            delayMinutes > 0 -> "+$delayMinutes min"
+            delayMinutes < 0 -> "$delayMinutes min"
+            else -> "pünktlich"
+        }
+        val actual = actualDeparture(time, delayMinutes)
+        Departure(
+            time = time,
+            actualTime = actual.time,
+            line = line,
+            destination = direction,
+            delay = delay,
+            delayMinutes = delayMinutes,
+            sortMinutes = actual.sortMinutes,
+        )
+    }.sortedBy { it.sortMinutes }.take(20).toList()
+}
+
+private data class ActualDeparture(val time: String, val sortMinutes: Int)
+
+private fun actualDeparture(time: String, delayMinutes: Int): ActualDeparture {
+    val parts = time.split(":")
+    val scheduledMinutes = (parts.getOrNull(0)?.toIntOrNull() ?: 0) * 60 + (parts.getOrNull(1)?.toIntOrNull() ?: 0)
+    val actualMinutes = scheduledMinutes + delayMinutes
+    val displayMinutes = ((actualMinutes % (24 * 60)) + (24 * 60)) % (24 * 60)
+    val hour = displayMinutes / 60
+    val minute = displayMinutes % 60
+    return ActualDeparture("%02d:%02d".format(Locale.GERMAN, hour, minute), actualMinutes)
 }
 
 private suspend fun searchStations(query: String): List<StationSuggestion> = withContext(Dispatchers.IO) {
