@@ -6,6 +6,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -21,6 +22,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.FilterChip
@@ -31,6 +33,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -49,7 +52,9 @@ import java.net.URLEncoder
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import org.json.JSONObject
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -89,6 +94,11 @@ data class Departure(
     val delay: String,
 )
 
+data class StationSuggestion(
+    val label: String,
+    val place: String,
+)
+
 sealed interface LiveState {
     data object Idle : LiveState
     data object Loading : LiveState
@@ -109,16 +119,8 @@ private fun BahnpendelnApp() {
     var selectedLine by remember { mutableStateOf("Alle") }
     var liveState by remember { mutableStateOf<LiveState>(LiveState.Idle) }
     val scope = rememberCoroutineScope()
-    val lines = listOf("Alle", "RE", "RB", "S", "Bus")
+    val lines = listOf("Alle", "RE/RB", "S", "Bus")
     val currentStation = if (activeStation == 0) stationOne else stationTwo
-    val stationSuggestions = listOf(
-        "Weilerswist Bf",
-        "Köln Messe/Deutz Bf",
-        "Köln Hbf",
-        "Bonn Hbf",
-        "Münster Hauptbahnhof",
-        "Münster Zentrum Nord",
-    )
 
     fun loadLive() {
         val station = currentStation.trim()
@@ -172,7 +174,6 @@ private fun BahnpendelnApp() {
                 EditStationCard(
                     title = if (activeStation == 0) "Bahnhof 1" else "Bahnhof 2",
                     station = currentStation,
-                    suggestions = stationSuggestions,
                     onStationChange = {
                         if (activeStation == 0) stationOne = it else stationTwo = it
                     },
@@ -203,7 +204,6 @@ private fun HeaderCard() {
                 "Zwei Bahnhöfe, klare Linienfilter und ein schneller Pendelblick.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            AssistChip(onClick = {}, label = { Text("Live erst per Button") })
         }
     }
 }
@@ -215,33 +215,66 @@ private fun StationSwitch(
     stationOne: String,
     stationTwo: String,
 ) {
-    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-        Button(
-            onClick = { onActiveStationChange(0) },
-            modifier = Modifier.weight(1f),
-            enabled = activeStation != 0,
-        ) { Text("Bahnhof 1") }
-        Button(
-            onClick = { onActiveStationChange(1) },
-            modifier = Modifier.weight(1f),
-            enabled = activeStation != 1,
-        ) { Text("Bahnhof 2") }
+    val activeLabel = if (activeStation == 0) "Bahnhof 1" else "Bahnhof 2"
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+        ElevatedCard(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(20.dp),
+            colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+        ) {
+            Text(
+                text = "Aktiv: $activeLabel",
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+            if (activeStation == 0) {
+                Button(onClick = { onActiveStationChange(0) }, modifier = Modifier.weight(1f)) { Text("Bahnhof 1") }
+                OutlinedButton(onClick = { onActiveStationChange(1) }, modifier = Modifier.weight(1f)) { Text("Bahnhof 2") }
+            } else {
+                OutlinedButton(onClick = { onActiveStationChange(0) }, modifier = Modifier.weight(1f)) { Text("Bahnhof 1") }
+                Button(onClick = { onActiveStationChange(1) }, modifier = Modifier.weight(1f)) { Text("Bahnhof 2") }
+            }
+        }
+        Text(
+            "1: ${stationOne.ifBlank { "leer" }}",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+            "2: ${stationTwo.ifBlank { "leer" }}",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
-    Text(
-        "Aktuell: ${if (activeStation == 0) stationOne else stationTwo}",
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-    )
 }
 
 @Composable
 private fun EditStationCard(
     title: String,
     station: String,
-    suggestions: List<String>,
     onStationChange: (String) -> Unit,
 ) {
+    var suggestions by remember { mutableStateOf<List<StationSuggestion>>(emptyList()) }
+    var isSearching by remember { mutableStateOf(false) }
+
+    LaunchedEffect(station) {
+        val query = station.trim()
+        if (query.length < 2) {
+            suggestions = emptyList()
+            isSearching = false
+            return@LaunchedEffect
+        }
+        delay(250)
+        isSearching = true
+        suggestions = runCatching { searchStations(query) }.getOrElse { emptyList() }
+        isSearching = false
+    }
+
     ElevatedCard(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(24.dp),
@@ -257,18 +290,34 @@ private fun EditStationCard(
                 label = { Text("Bahnhof") },
                 placeholder = { Text("z. B. Weilerswist Bf") },
             )
-            Text("Vorschläge", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                suggestions.chunked(2).forEach { rowSuggestions ->
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                        rowSuggestions.forEach { suggestion ->
-                            AssistChip(
-                                onClick = { onStationChange(suggestion) },
-                                label = { Text(suggestion, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                                modifier = Modifier.weight(1f),
-                            )
+            if (station.trim().length >= 2) {
+                Text(
+                    if (isSearching && suggestions.isEmpty()) "Suche Vorschläge in der EFA …" else "Vorschläge aus der EFA",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    suggestions.take(6).forEach { suggestion ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onStationChange(suggestion.label) }
+                                .padding(horizontal = 6.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(suggestion.label, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                if (suggestion.place.isNotBlank() && suggestion.place != suggestion.label) {
+                                    Text(suggestion.place, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                }
+                            }
                         }
-                        if (rowSuggestions.size == 1) Spacer(modifier = Modifier.weight(1f))
+                    }
+                    if (suggestions.isEmpty() && !isSearching) {
+                        Text(
+                            "Keine passenden EFA-Vorschläge gefunden.",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
                 }
             }
@@ -290,7 +339,7 @@ private fun LineFilterCard(lines: List<String>, selectedLine: String, onSelect: 
                     FilterChip(
                         selected = selectedLine == line,
                         onClick = { onSelect(line) },
-                        label = { Text(line) },
+                        label = { Text(if (line == "RE/RB") "RE / RB" else line) },
                     )
                 }
             }
@@ -313,7 +362,7 @@ private fun DeparturesCard(
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("Pendelblick", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             Text(station.ifBlank { "Bitte Bahnhof eintragen" }, fontWeight = FontWeight.Medium)
-            Text("Filter: $selectedLine", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("Filter: ${if (selectedLine == "RE/RB") "RE / RB" else selectedLine}", color = MaterialTheme.colorScheme.onSurfaceVariant)
             Button(onClick = onLoadLive, enabled = liveState !is LiveState.Loading, modifier = Modifier.fillMaxWidth()) {
                 Text(if (liveState is LiveState.Loading) "Lädt…" else "Live laden")
             }
@@ -323,7 +372,11 @@ private fun DeparturesCard(
                 is LiveState.Error -> Text("Fehler: ${liveState.message}", color = Color(0xFFB00020))
                 is LiveState.Ready -> {
                     val filtered = liveState.rows.filter { row ->
-                        selectedLine == "Alle" || row.line.uppercase(Locale.GERMAN).startsWith(selectedLine)
+                        when (selectedLine) {
+                            "Alle" -> true
+                            "RE/RB" -> row.line.uppercase(Locale.GERMAN).startsWith("RE") || row.line.uppercase(Locale.GERMAN).startsWith("RB")
+                            else -> row.line.uppercase(Locale.GERMAN).startsWith(selectedLine)
+                        }
                     }
                     Text("Stand ${liveState.loadedAt} · ${liveState.station}", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     if (filtered.isEmpty()) {
@@ -341,12 +394,16 @@ private fun DeparturesCard(
 
 @Composable
 private fun DepartureRow(departure: Departure) {
+    val departureTime = if (departure.delay.isBlank()) {
+        departure.time
+    } else {
+        "${departure.time} · ${departure.delay}"
+    }
     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Text(departure.time, fontWeight = FontWeight.Bold, modifier = Modifier.width(54.dp))
-        Text(departure.line, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold, modifier = Modifier.width(54.dp))
+        Text(departureTime, fontWeight = FontWeight.Bold, modifier = Modifier.width(94.dp))
+        Text(departure.line, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold, modifier = Modifier.width(64.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(departure.destination.ifBlank { "Richtung unbekannt" }, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            if (departure.delay.isNotBlank()) Text(departure.delay, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
@@ -423,6 +480,69 @@ private fun parseDepartures(html: String): List<Departure> {
         Departure(time = time, line = line, destination = direction, delay = delay)
     }.take(20).toList()
 }
+
+private suspend fun searchStations(query: String): List<StationSuggestion> = withContext(Dispatchers.IO) {
+    val url = URL(
+        "https://efa.vrr.de/vrr/XSLT_STOPFINDER_REQUEST?" +
+            listOf(
+                "language" to "de",
+                "outputFormat" to "JSON",
+                "type_sf" to "any",
+                "name_sf" to query,
+            ).joinToString("&") { (key, value) -> "${enc(key)}=${enc(value)}" }
+    )
+    val connection = url.openConnection() as HttpURLConnection
+    connection.connectTimeout = 12_000
+    connection.readTimeout = 12_000
+    connection.setRequestProperty("User-Agent", "Bahnpendeln/0.1")
+    val bytes = try {
+        val stream = if (connection.responseCode in 200..299) connection.inputStream else connection.errorStream
+        stream?.readBytes() ?: return@withContext emptyList()
+    } finally {
+        connection.disconnect()
+    }
+    val json = JSONObject(String(bytes, Charsets.UTF_8))
+    val points = json.optJSONObject("stopFinder")?.optJSONArray("points") ?: return@withContext emptyList()
+    val q = normalize(query)
+    val candidates = mutableListOf<StationSuggestion>()
+    for (i in 0 until points.length()) {
+        val point = points.optJSONObject(i) ?: continue
+        val label = point.optString("name").trim()
+        val place = point.optJSONObject("ref")?.optString("place").orEmpty().trim()
+        if (!matchesStationQuery(label, place, q)) continue
+        candidates += StationSuggestion(label = label, place = place)
+    }
+    candidates
+        .distinctBy { normalize(it.label) + "|" + normalize(it.place) }
+        .sortedWith(compareBy<StationSuggestion> { stationSuggestionScore(it, q) }.thenBy { it.label.length })
+        .take(6)
+}
+
+private fun stationSuggestionScore(suggestion: StationSuggestion, query: String): Int {
+    val label = normalize(suggestion.label)
+    val place = normalize(suggestion.place)
+    return when {
+        label == query -> 0
+        label.startsWith("$query,") || label.startsWith("$query ") -> 1
+        label.contains(", $query") || label.contains(" $query") -> 2
+        place == query -> 3
+        place.startsWith(query) -> 4
+        else -> 5
+    }
+}
+
+private fun matchesStationQuery(label: String, place: String, query: String): Boolean {
+    val labelN = normalize(label)
+    val placeN = normalize(place)
+    return labelN == query || labelN.startsWith("$query,") || labelN.startsWith("$query ") ||
+        labelN.contains(", $query") || labelN.contains(" $query") ||
+        placeN == query || placeN.startsWith(query) || placeN.contains(query)
+}
+
+private fun normalize(value: String): String = java.text.Normalizer.normalize(value, java.text.Normalizer.Form.NFD)
+    .replace(Regex("\\p{Mn}+"), "")
+    .lowercase(Locale.GERMAN)
+    .trim()
 
 private fun String.plain(): String = replace(Regex("<[^>]+>"), " ")
     .replace("&nbsp;", " ")
