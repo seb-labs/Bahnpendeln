@@ -95,8 +95,10 @@ data class Departure(
 )
 
 data class StationSuggestion(
+    val id: String,
     val label: String,
     val place: String,
+    val anyType: String,
 )
 
 sealed interface LiveState {
@@ -130,15 +132,17 @@ private fun BahnpendelnApp() {
         }
         liveState = LiveState.Loading
         scope.launch {
-            liveState = runCatching { fetchDepartures(station) }
+            liveState = runCatching { resolveStation(station) }
+                .mapCatching { resolved ->
+                    val rows = fetchDepartures(resolved.id)
+                    LiveState.Ready(
+                        station = resolved.label,
+                        rows = rows,
+                        loadedAt = SimpleDateFormat("HH:mm:ss", Locale.GERMAN).format(Date()),
+                    )
+                }
                 .fold(
-                    onSuccess = { rows ->
-                        LiveState.Ready(
-                            station = station,
-                            rows = rows,
-                            loadedAt = SimpleDateFormat("HH:mm:ss", Locale.GERMAN).format(Date()),
-                        )
-                    },
+                    onSuccess = { it },
                     onFailure = { error -> LiveState.Error(error.message ?: "Live-Abfrage fehlgeschlagen") },
                 )
         }
@@ -425,7 +429,7 @@ private fun InfoCard() {
     }
 }
 
-private suspend fun fetchDepartures(station: String): List<Departure> = withContext(Dispatchers.IO) {
+private suspend fun fetchDepartures(stationId: String): List<Departure> = withContext(Dispatchers.IO) {
     val body = listOf(
         "language" to "de",
         "itdLPxx_contractor" to "ves",
@@ -433,7 +437,7 @@ private suspend fun fetchDepartures(station: String): List<Departure> = withCont
         "useAllStops" to "1",
         "includeCompleteStopSeq" to "1",
         "useRealtime" to "1",
-        "name_dm" to station,
+        "name_dm" to stationId,
         "type_dm" to "stop",
         "nameInfo_dm" to "invalid",
     ).joinToString("&") { (key, value) -> "${enc(key)}=${enc(value)}" }
@@ -509,13 +513,23 @@ private suspend fun searchStations(query: String): List<StationSuggestion> = wit
         val point = points.optJSONObject(i) ?: continue
         val label = point.optString("name").trim()
         val place = point.optJSONObject("ref")?.optString("place").orEmpty().trim()
+        val id = point.optJSONObject("ref")?.optString("id").orEmpty().trim().ifBlank { point.optString("stateless") }
+        val anyType = point.optString("anyType").trim()
         if (!matchesStationQuery(label, place, q)) continue
-        candidates += StationSuggestion(label = label, place = place)
+        candidates += StationSuggestion(id = id, label = label, place = place, anyType = anyType)
     }
-    candidates
-        .distinctBy { normalize(it.label) + "|" + normalize(it.place) }
+    return@withContext candidates
+        .distinctBy { normalize(it.label) + "|" + normalize(it.place) + "|" + it.id }
         .sortedWith(compareBy<StationSuggestion> { stationSuggestionScore(it, q) }.thenBy { it.label.length })
-        .take(6)
+        .take(8)
+}
+
+private suspend fun resolveStation(query: String): StationSuggestion {
+    val candidates = searchStations(query)
+    val stopCandidates = candidates.filter { it.anyType == "stop" }
+    val picked = (stopCandidates.firstOrNull() ?: candidates.firstOrNull())
+        ?: throw IllegalStateException("Keine passende Haltestelle gefunden")
+    return picked
 }
 
 private fun stationSuggestionScore(suggestion: StationSuggestion, query: String): Int {
