@@ -116,7 +116,7 @@ data class StationSuggestion(
 sealed interface LiveState {
     data object Idle : LiveState
     data object Loading : LiveState
-    data class Ready(val station: String, val rows: List<Departure>, val loadedAt: String) : LiveState
+    data class Ready(val station: String, val stationId: String, val rows: List<Departure>, val loadedAt: String) : LiveState
     data class Error(val message: String) : LiveState
 }
 
@@ -132,24 +132,34 @@ private fun BahnpendelnApp() {
     var activeStation by remember { mutableStateOf(0) }
     var selectedLine by remember { mutableStateOf("Alle") }
     var liveState by remember { mutableStateOf<LiveState>(LiveState.Idle) }
+    var lastResolvedStation by remember { mutableStateOf<StationSuggestion?>(null) }
     val scope = rememberCoroutineScope()
     val lines = listOf("Alle", "RE/RB", "S", "Bus")
     val currentStation = if (activeStation == 0) stationOne else stationTwo
 
-    fun loadLive() {
+    fun loadLive(refreshCurrentResults: Boolean = false) {
         if (liveState is LiveState.Loading) return
+        val previous = lastResolvedStation
         val station = currentStation.trim()
-        if (station.isBlank()) {
+        if (!refreshCurrentResults && station.isBlank()) {
+            liveState = LiveState.Error("Bitte zuerst einen Bahnhof eintragen.")
+            return
+        }
+        if (refreshCurrentResults && previous == null && station.isBlank()) {
             liveState = LiveState.Error("Bitte zuerst einen Bahnhof eintragen.")
             return
         }
         liveState = LiveState.Loading
         scope.launch {
-            liveState = runCatching { resolveStation(station) }
+            liveState = runCatching {
+                if (refreshCurrentResults && previous != null) previous else resolveStation(station)
+            }
                 .mapCatching { resolved ->
                     val rows = fetchDepartures(resolved.id)
+                    lastResolvedStation = resolved
                     LiveState.Ready(
                         station = resolved.label,
+                        stationId = resolved.id,
                         rows = rows,
                         loadedAt = SimpleDateFormat("HH:mm:ss", Locale.GERMAN).format(Date()),
                     )
@@ -161,10 +171,12 @@ private fun BahnpendelnApp() {
         }
     }
 
+    fun refreshLive() = loadLive(refreshCurrentResults = true)
+
     val scrollState = rememberScrollState()
     var pullDistance by remember { mutableStateOf(0f) }
-    val pullRefreshState = rememberPullRefreshState(refreshing = liveState is LiveState.Loading, onRefresh = ::loadLive)
-    val swipeRefreshConnection = remember(scrollState, liveState, currentStation) {
+    val pullRefreshState = rememberPullRefreshState(refreshing = liveState is LiveState.Loading, onRefresh = ::refreshLive)
+    val swipeRefreshConnection = remember(scrollState, liveState, currentStation, lastResolvedStation) {
         object : NestedScrollConnection {
             override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
                 if (source == NestedScrollSource.Drag && scrollState.value == 0 && available.y > 0f && liveState !is LiveState.Loading) {
@@ -175,7 +187,7 @@ private fun BahnpendelnApp() {
 
             override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
                 if (pullDistance > 96f && liveState !is LiveState.Loading) {
-                    loadLive()
+                    refreshLive()
                 }
                 pullDistance = 0f
                 return Velocity.Zero
@@ -223,7 +235,7 @@ private fun BahnpendelnApp() {
                     station = currentStation,
                     selectedLine = selectedLine,
                     liveState = liveState,
-                    onLoadLive = ::loadLive,
+                    onLoadLive = { loadLive() },
                 )
                 InfoCard()
             }
