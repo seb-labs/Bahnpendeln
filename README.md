@@ -2,18 +2,26 @@
 
 Bahnpendeln ist eine kleine Android-App für den schnellen Pendelblick.
 
-## Aktueller Stand
-
-Diese Version ist eine frisch aufgebaute stabile Basis:
+## Was die App aktuell kann
 
 - zwei Bahnhöfe eintragen
 - Bahnhof 1 / Bahnhof 2 umschalten
 - Linienfilter auswählen
-- modernes, kompaktes Compose-Layout
+- moderne, kompakte Compose-Oberfläche
+- VRR/EFA-Live-Abfrage **nur per Button**
 - kein Netzwerkzugriff beim App-Start
+- Fehleranzeige in der App statt Absturz
 - keine privaten Zugangsdaten im Code
 
-Der Live-Abruf für VRR/EFA wird im nächsten Schritt kontrolliert ergänzt, sobald die Basis auf dem Gerät stabil öffnet.
+## Nutzung
+
+1. App öffnen.
+2. Bahnhof 1 oder Bahnhof 2 auswählen.
+3. Bahnhofsnamen eintragen.
+4. Optional einen Linienfilter wählen.
+5. Auf **Live laden** tippen.
+
+Die App lädt dann die nächsten sichtbaren Abfahrten aus der öffentlichen VRR/EFA-Abfahrtstafel.
 
 ## Download
 

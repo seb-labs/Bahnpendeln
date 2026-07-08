@@ -34,6 +34,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -42,6 +43,15 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import java.net.HttpURLConnection
+import java.net.URL
+import java.net.URLEncoder
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -72,6 +82,20 @@ private val DarkColors = darkColorScheme(
     onSurfaceVariant = Color(0xFFB1BCD1),
 )
 
+data class Departure(
+    val time: String,
+    val line: String,
+    val destination: String,
+    val delay: String,
+)
+
+sealed interface LiveState {
+    data object Idle : LiveState
+    data object Loading : LiveState
+    data class Ready(val station: String, val rows: List<Departure>, val loadedAt: String) : LiveState
+    data class Error(val message: String) : LiveState
+}
+
 @Composable
 private fun BahnpendelnTheme(content: @Composable () -> Unit) {
     MaterialTheme(colorScheme = LightColors, content = content)
@@ -83,8 +107,32 @@ private fun BahnpendelnApp() {
     var stationTwo by remember { mutableStateOf("Münster Zentrum Nord") }
     var activeStation by remember { mutableStateOf(0) }
     var selectedLine by remember { mutableStateOf("Alle") }
+    var liveState by remember { mutableStateOf<LiveState>(LiveState.Idle) }
+    val scope = rememberCoroutineScope()
     val lines = listOf("Alle", "RE", "RB", "S", "Bus")
     val currentStation = if (activeStation == 0) stationOne else stationTwo
+
+    fun loadLive() {
+        val station = currentStation.trim()
+        if (station.isBlank()) {
+            liveState = LiveState.Error("Bitte zuerst einen Bahnhof eintragen.")
+            return
+        }
+        liveState = LiveState.Loading
+        scope.launch {
+            liveState = runCatching { fetchDepartures(station) }
+                .fold(
+                    onSuccess = { rows ->
+                        LiveState.Ready(
+                            station = station,
+                            rows = rows,
+                            loadedAt = SimpleDateFormat("HH:mm:ss", Locale.GERMAN).format(Date()),
+                        )
+                    },
+                    onFailure = { error -> LiveState.Error(error.message ?: "Live-Abfrage fehlgeschlagen") },
+                )
+        }
+    }
 
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Box(
@@ -121,7 +169,12 @@ private fun BahnpendelnApp() {
                     },
                 )
                 LineFilterCard(lines, selectedLine) { selectedLine = it }
-                DeparturesCard(currentStation, selectedLine)
+                DeparturesCard(
+                    station = currentStation,
+                    selectedLine = selectedLine,
+                    liveState = liveState,
+                    onLoadLive = ::loadLive,
+                )
                 InfoCard()
             }
         }
@@ -141,7 +194,7 @@ private fun HeaderCard() {
                 "Zwei Bahnhöfe, klare Linienfilter und ein schneller Pendelblick.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            AssistChip(onClick = {}, label = { Text("Frischer stabiler Neustart") })
+            AssistChip(onClick = {}, label = { Text("Live erst per Button") })
         }
     }
 }
@@ -216,7 +269,12 @@ private fun LineFilterCard(lines: List<String>, selectedLine: String, onSelect: 
 }
 
 @Composable
-private fun DeparturesCard(station: String, selectedLine: String) {
+private fun DeparturesCard(
+    station: String,
+    selectedLine: String,
+    liveState: LiveState,
+    onLoadLive: () -> Unit,
+) {
     ElevatedCard(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(24.dp),
@@ -225,17 +283,40 @@ private fun DeparturesCard(station: String, selectedLine: String) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("Pendelblick", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             Text(station.ifBlank { "Bitte Bahnhof eintragen" }, fontWeight = FontWeight.Medium)
-            Text(
-                "Filter: $selectedLine · Live-Daten werden im nächsten Schritt sicher ergänzt. Diese Version öffnet stabil ohne Start-Abfrage.",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            listOf("Nächste Abfahrten", "Verspätungen", "Gleis/Steig").forEach { label ->
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("•", color = MaterialTheme.colorScheme.primary)
-                    Spacer(Modifier.width(8.dp))
-                    Text(label)
+            Text("Filter: $selectedLine", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Button(onClick = onLoadLive, enabled = liveState !is LiveState.Loading, modifier = Modifier.fillMaxWidth()) {
+                Text(if (liveState is LiveState.Loading) "Lädt…" else "Live laden")
+            }
+            when (liveState) {
+                LiveState.Idle -> Text("Tippe auf „Live laden“, um Abfahrten für den ausgewählten Bahnhof zu holen.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                LiveState.Loading -> Text("VRR/EFA wird abgefragt…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                is LiveState.Error -> Text("Fehler: ${liveState.message}", color = Color(0xFFB00020))
+                is LiveState.Ready -> {
+                    val filtered = liveState.rows.filter { row ->
+                        selectedLine == "Alle" || row.line.uppercase(Locale.GERMAN).startsWith(selectedLine)
+                    }
+                    Text("Stand ${liveState.loadedAt} · ${liveState.station}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (filtered.isEmpty()) {
+                        Text("Keine passenden Abfahrten gefunden.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    } else {
+                        filtered.take(8).forEach { departure ->
+                            DepartureRow(departure)
+                        }
+                    }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun DepartureRow(departure: Departure) {
+    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(departure.time, fontWeight = FontWeight.Bold, modifier = Modifier.width(54.dp))
+        Text(departure.line, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold, modifier = Modifier.width(54.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(departure.destination.ifBlank { "Richtung unbekannt" }, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (departure.delay.isNotBlank()) Text(departure.delay, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
@@ -250,9 +331,74 @@ private fun InfoCard() {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text("Hinweis", fontWeight = FontWeight.SemiBold)
             Text(
-                "Diese frische Basis enthält keine alten Projektfragmente und keine privaten Daten. Der Live-Abruf wird danach kontrolliert eingebaut.",
+                "Die App öffnet ohne Start-Abfrage. Live-Daten werden nur geladen, wenn du den Button drückst.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
     }
 }
+
+private suspend fun fetchDepartures(station: String): List<Departure> = withContext(Dispatchers.IO) {
+    val body = listOf(
+        "language" to "de",
+        "itdLPxx_contractor" to "ves",
+        "mode" to "direct",
+        "useAllStops" to "1",
+        "includeCompleteStopSeq" to "1",
+        "useRealtime" to "1",
+        "name_dm" to station,
+        "type_dm" to "stop",
+        "nameInfo_dm" to "invalid",
+    ).joinToString("&") { (key, value) -> "${enc(key)}=${enc(value)}" }
+
+    val connection = URL("https://efa.vrr.de/vesstd3/XSLT_DM_REQUEST").openConnection() as HttpURLConnection
+    connection.requestMethod = "POST"
+    connection.connectTimeout = 12_000
+    connection.readTimeout = 12_000
+    connection.doOutput = true
+    connection.setRequestProperty("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
+    connection.setRequestProperty("User-Agent", "Bahnpendeln/0.1")
+    connection.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+    val bytes = try {
+        val stream = if (connection.responseCode in 200..299) connection.inputStream else connection.errorStream
+        stream?.readBytes() ?: throw IllegalStateException("Leere Antwort vom VRR/EFA-Server")
+    } finally {
+        connection.disconnect()
+    }
+    val html = String(bytes, Charsets.ISO_8859_1)
+    parseDepartures(html)
+}
+
+private fun parseDepartures(html: String): List<Departure> {
+    val rowStarts = Regex("""std3_departure-line""").findAll(html).map { it.range.first }.toList()
+    if (rowStarts.isEmpty()) {
+        val times = Regex("""\b\d{1,2}:\d{2}\b""").findAll(html).map { it.value }.distinct().take(8).toList()
+        return times.map { Departure(time = it, line = "?", destination = "Abfahrt gefunden", delay = "") }
+    }
+    return rowStarts.mapIndexedNotNull { index, start ->
+        val end = rowStarts.getOrNull(index + 1) ?: html.length
+        val chunk = html.substring(start, end)
+        val time = Regex("""\b\d{1,2}:\d{2}\b""").find(chunk)?.value ?: return@mapIndexedNotNull null
+        val line = Regex("""data-shortname="([^"]+)""").find(chunk)?.groupValues?.getOrNull(1)?.plain().orEmpty()
+            .ifBlank { Regex("""title="([^"]+)""").find(chunk)?.groupValues?.getOrNull(1)?.plain().orEmpty() }
+            .ifBlank { "Linie" }
+        val direction = Regex("""Richtung</span>(.*?)</div>""", RegexOption.DOT_MATCHES_ALL)
+            .find(chunk)?.groupValues?.getOrNull(1)?.plain().orEmpty()
+        val delay = Regex("""data-delay="(-?\d+)""").find(chunk)?.groupValues?.getOrNull(1)?.toIntOrNull()?.let {
+            when {
+                it > 0 -> "+$it min"
+                it < 0 -> "$it min"
+                else -> "pünktlich"
+            }
+        }.orEmpty()
+        Departure(time = time, line = line, destination = direction, delay = delay)
+    }.take(20)
+}
+
+private fun String.plain(): String = replace(Regex("<[^>]+>"), " ")
+    .replace("&nbsp;", " ")
+    .replace("&amp;", "&")
+    .replace(Regex("""\s+"""), " ")
+    .trim()
+
+private fun enc(value: String): String = URLEncoder.encode(value, "UTF-8")
