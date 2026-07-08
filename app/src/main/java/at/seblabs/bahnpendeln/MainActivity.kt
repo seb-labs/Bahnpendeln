@@ -168,7 +168,6 @@ private fun BahnpendelnApp() {
                     .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
-                HeaderCard()
                 StationSwitch(
                     activeStation = activeStation,
                     onActiveStationChange = { activeStation = it },
@@ -191,23 +190,6 @@ private fun BahnpendelnApp() {
                 )
                 InfoCard()
             }
-        }
-    }
-}
-
-@Composable
-private fun HeaderCard() {
-    ElevatedCard(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(28.dp),
-        colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface),
-    ) {
-        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Bahnpendeln", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-            Text(
-                "Zwei Bahnhöfe, klare Linienfilter und ein schneller Pendelblick.",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
         }
     }
 }
@@ -360,18 +342,22 @@ private fun DeparturesCard(
 ) {
     ElevatedCard(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(24.dp),
+        shape = RoundedCornerShape(20.dp),
         colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface),
     ) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Pendelblick", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-            Text(station.ifBlank { "Bitte Bahnhof eintragen" }, fontWeight = FontWeight.Medium)
-            Text("Filter: ${if (selectedLine == "RE/RB") "RE / RB" else selectedLine}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Pendelblick", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+            Text(
+                "${station.ifBlank { "Bitte Bahnhof eintragen" }} · ${if (selectedLine == "RE/RB") "RE / RB" else selectedLine}",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
             Button(onClick = onLoadLive, enabled = liveState !is LiveState.Loading, modifier = Modifier.fillMaxWidth()) {
                 Text(if (liveState is LiveState.Loading) "Lädt…" else "Live laden")
             }
             when (liveState) {
-                LiveState.Idle -> Text("Tippe auf „Live laden“, um Abfahrten für den ausgewählten Bahnhof zu holen.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                LiveState.Idle -> Text("Abfahrten erscheinen nach dem Laden.", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 LiveState.Loading -> Text("VRR/EFA wird abgefragt…", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 is LiveState.Error -> Text("Fehler: ${liveState.message}", color = Color(0xFFB00020))
                 is LiveState.Ready -> {
@@ -382,11 +368,10 @@ private fun DeparturesCard(
                             else -> row.line.uppercase(Locale.GERMAN).startsWith(selectedLine)
                         }
                     }
-                    Text("Stand ${liveState.loadedAt} · ${liveState.station}", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     if (filtered.isEmpty()) {
                         Text("Keine passenden Abfahrten gefunden.", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     } else {
-                        filtered.take(8).forEach { departure ->
+                        filtered.take(5).forEach { departure ->
                             DepartureRow(departure)
                         }
                     }
@@ -398,17 +383,16 @@ private fun DeparturesCard(
 
 @Composable
 private fun DepartureRow(departure: Departure) {
-    val departureTime = if (departure.delay.isBlank()) {
-        departure.time
-    } else {
-        "${departure.time} · ${departure.delay}"
-    }
-    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Text(departureTime, fontWeight = FontWeight.Bold, modifier = Modifier.width(94.dp))
-        Text(departure.line, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold, modifier = Modifier.width(64.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(departure.destination.ifBlank { "Richtung unbekannt" }, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        }
+    val departureTime = if (departure.delay.isBlank()) departure.time else "${departure.time} · ${departure.delay}"
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(departureTime, fontWeight = FontWeight.Bold, modifier = Modifier.width(88.dp))
+        Text(departure.line, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold, modifier = Modifier.width(58.dp))
+        Text(departure.destination.ifBlank { "Richtung unbekannt" }, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
     }
 }
 
