@@ -1,4 +1,4 @@
-@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class, androidx.compose.material.ExperimentalMaterialApi::class)
 
 package at.seblabs.bahnpendeln
 
@@ -20,6 +20,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.pullrefresh.PullRefreshIndicator
+import androidx.compose.material.pullrefresh.pullRefresh
+import androidx.compose.material.pullrefresh.rememberPullRefreshState
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.OutlinedButton
@@ -125,6 +128,7 @@ private fun BahnpendelnApp() {
     val currentStation = if (activeStation == 0) stationOne else stationTwo
 
     fun loadLive() {
+        if (liveState is LiveState.Loading) return
         val station = currentStation.trim()
         if (station.isBlank()) {
             liveState = LiveState.Error("Bitte zuerst einen Bahnhof eintragen.")
@@ -148,6 +152,8 @@ private fun BahnpendelnApp() {
         }
     }
 
+    val pullRefreshState = rememberPullRefreshState(refreshing = liveState is LiveState.Loading, onRefresh = ::loadLive)
+
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Box(
             modifier = Modifier
@@ -160,6 +166,7 @@ private fun BahnpendelnApp() {
                         )
                     )
                 )
+                .pullRefresh(pullRefreshState)
         ) {
             Column(
                 modifier = Modifier
@@ -190,6 +197,11 @@ private fun BahnpendelnApp() {
                 )
                 InfoCard()
             }
+            PullRefreshIndicator(
+                refreshing = liveState is LiveState.Loading,
+                state = pullRefreshState,
+                modifier = Modifier.align(Alignment.TopCenter),
+            )
         }
     }
 }
