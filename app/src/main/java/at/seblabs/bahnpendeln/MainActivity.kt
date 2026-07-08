@@ -111,6 +111,14 @@ private fun BahnpendelnApp() {
     val scope = rememberCoroutineScope()
     val lines = listOf("Alle", "RE", "RB", "S", "Bus")
     val currentStation = if (activeStation == 0) stationOne else stationTwo
+    val stationSuggestions = listOf(
+        "Weilerswist Bf",
+        "Köln Messe/Deutz Bf",
+        "Köln Hbf",
+        "Bonn Hbf",
+        "Münster Hauptbahnhof",
+        "Münster Zentrum Nord",
+    )
 
     fun loadLive() {
         val station = currentStation.trim()
@@ -164,6 +172,7 @@ private fun BahnpendelnApp() {
                 EditStationCard(
                     title = if (activeStation == 0) "Bahnhof 1" else "Bahnhof 2",
                     station = currentStation,
+                    suggestions = stationSuggestions,
                     onStationChange = {
                         if (activeStation == 0) stationOne = it else stationTwo = it
                     },
@@ -227,7 +236,12 @@ private fun StationSwitch(
 }
 
 @Composable
-private fun EditStationCard(title: String, station: String, onStationChange: (String) -> Unit) {
+private fun EditStationCard(
+    title: String,
+    station: String,
+    suggestions: List<String>,
+    onStationChange: (String) -> Unit,
+) {
     ElevatedCard(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(24.dp),
@@ -241,7 +255,23 @@ private fun EditStationCard(title: String, station: String, onStationChange: (St
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
                 label = { Text("Bahnhof") },
+                placeholder = { Text("z. B. Weilerswist Bf") },
             )
+            Text("Vorschläge", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                suggestions.chunked(2).forEach { rowSuggestions ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        rowSuggestions.forEach { suggestion ->
+                            AssistChip(
+                                onClick = { onStationChange(suggestion) },
+                                label = { Text(suggestion, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                        if (rowSuggestions.size == 1) Spacer(modifier = Modifier.weight(1f))
+                    }
+                }
+            }
         }
     }
 }
@@ -365,24 +395,23 @@ private suspend fun fetchDepartures(station: String): List<Departure> = withCont
     } finally {
         connection.disconnect()
     }
-    val html = String(bytes, Charsets.ISO_8859_1)
+    val html = String(bytes, Charsets.UTF_8)
     parseDepartures(html)
 }
 
 private fun parseDepartures(html: String): List<Departure> {
-    val rowStarts = Regex("""std3_departure-line""").findAll(html).map { it.range.first }.toList()
-    if (rowStarts.isEmpty()) {
-        val times = Regex("""\b\d{1,2}:\d{2}\b""").findAll(html).map { it.value }.distinct().take(8).toList()
-        return times.map { Departure(time = it, line = "?", destination = "Abfahrt gefunden", delay = "") }
-    }
-    return rowStarts.mapIndexedNotNull { index, start ->
-        val end = rowStarts.getOrNull(index + 1) ?: html.length
-        val chunk = html.substring(start, end)
-        val time = Regex("""\b\d{1,2}:\d{2}\b""").find(chunk)?.value ?: return@mapIndexedNotNull null
+    val rowRegex = Regex(
+        """<div class="std3_col-xs-12 std3_full-size std3_departure-line.*?data-draw-line=.*?(?=<div class="std3_col-xs-12 std3_full-size std3_departure-line|</main>|</body>|$)""",
+        setOf(RegexOption.DOT_MATCHES_ALL),
+    )
+    return rowRegex.findAll(html).mapNotNull { match ->
+        val chunk = match.value
+        val time = Regex("""<span class="std3_time_col">(\d{1,2}:\d{2})""")
+            .find(chunk)?.groupValues?.getOrNull(1) ?: return@mapNotNull null
         val line = Regex("""data-shortname="([^"]+)""").find(chunk)?.groupValues?.getOrNull(1)?.plain().orEmpty()
-            .ifBlank { Regex("""title="([^"]+)""").find(chunk)?.groupValues?.getOrNull(1)?.plain().orEmpty() }
+            .ifBlank { Regex("""<span class="std3_mot-label">.*?</span>\s*([^<]+)</span>""", RegexOption.DOT_MATCHES_ALL).find(chunk)?.groupValues?.getOrNull(1)?.plain().orEmpty() }
             .ifBlank { "Linie" }
-        val direction = Regex("""Richtung</span>(.*?)</div>""", RegexOption.DOT_MATCHES_ALL)
+        val direction = Regex("""<div class="std3_result-description"><span class="std3_sr-only">Richtung</span>(.*?)</div>""", RegexOption.DOT_MATCHES_ALL)
             .find(chunk)?.groupValues?.getOrNull(1)?.plain().orEmpty()
         val delay = Regex("""data-delay="(-?\d+)""").find(chunk)?.groupValues?.getOrNull(1)?.toIntOrNull()?.let {
             when {
@@ -392,7 +421,7 @@ private fun parseDepartures(html: String): List<Departure> {
             }
         }.orEmpty()
         Departure(time = time, line = line, destination = direction, delay = delay)
-    }.take(20)
+    }.take(20).toList()
 }
 
 private fun String.plain(): String = replace(Regex("<[^>]+>"), " ")
