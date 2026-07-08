@@ -311,7 +311,7 @@ private fun DeparturesCard(
         colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface),
     ) {
         Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Pendelblick", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+            Text("", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
             Text(
                 "${station.ifBlank { "Bitte Bahnhof eintragen" }} · RE / RB",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
