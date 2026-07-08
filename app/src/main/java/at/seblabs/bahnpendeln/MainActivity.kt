@@ -1,4 +1,4 @@
-@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class, androidx.compose.material.ExperimentalMaterialApi::class)
+@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 
 package at.seblabs.bahnpendeln
 
@@ -20,15 +20,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.pullrefresh.PullRefreshIndicator
-import androidx.compose.material.pullrefresh.pullRefresh
-import androidx.compose.material.pullrefresh.rememberPullRefreshState
-import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ElevatedCard
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -44,15 +39,10 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
-import androidx.compose.ui.input.nestedscroll.NestedScrollSource
-import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import java.net.HttpURLConnection
 import java.net.URL
@@ -127,36 +117,25 @@ private fun BahnpendelnTheme(content: @Composable () -> Unit) {
 
 @Composable
 private fun BahnpendelnApp() {
-    var stationOne by remember { mutableStateOf("Münster Hauptbahnhof") }
-    var stationTwo by remember { mutableStateOf("Münster Zentrum Nord") }
+    var stationOne by remember { mutableStateOf("") }
+    var stationTwo by remember { mutableStateOf("") }
     var activeStation by remember { mutableStateOf(0) }
-    var selectedLine by remember { mutableStateOf("Alle") }
     var liveState by remember { mutableStateOf<LiveState>(LiveState.Idle) }
-    var lastResolvedStation by remember { mutableStateOf<StationSuggestion?>(null) }
     val scope = rememberCoroutineScope()
-    val lines = listOf("Alle", "RE/RB", "S", "Bus")
     val currentStation = if (activeStation == 0) stationOne else stationTwo
 
-    fun loadLive(refreshCurrentResults: Boolean = false) {
+    fun loadLive() {
         if (liveState is LiveState.Loading) return
-        val previous = lastResolvedStation
         val station = currentStation.trim()
-        if (!refreshCurrentResults && station.isBlank()) {
-            liveState = LiveState.Error("Bitte zuerst einen Bahnhof eintragen.")
-            return
-        }
-        if (refreshCurrentResults && previous == null && station.isBlank()) {
+        if (station.isBlank()) {
             liveState = LiveState.Error("Bitte zuerst einen Bahnhof eintragen.")
             return
         }
         liveState = LiveState.Loading
         scope.launch {
-            liveState = runCatching {
-                if (refreshCurrentResults && previous != null) previous else resolveStation(station)
-            }
+            liveState = runCatching { resolveStation(station) }
                 .mapCatching { resolved ->
                     val rows = fetchDepartures(resolved.id)
-                    lastResolvedStation = resolved
                     LiveState.Ready(
                         station = resolved.label,
                         stationId = resolved.id,
@@ -171,29 +150,7 @@ private fun BahnpendelnApp() {
         }
     }
 
-    fun refreshLive() = loadLive(refreshCurrentResults = true)
-
     val scrollState = rememberScrollState()
-    var pullDistance by remember { mutableStateOf(0f) }
-    val pullRefreshState = rememberPullRefreshState(refreshing = liveState is LiveState.Loading, onRefresh = ::refreshLive)
-    val swipeRefreshConnection = remember(scrollState, liveState, currentStation, lastResolvedStation) {
-        object : NestedScrollConnection {
-            override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
-                if (source == NestedScrollSource.Drag && scrollState.value == 0 && available.y > 0f && liveState !is LiveState.Loading) {
-                    pullDistance += available.y
-                }
-                return Offset.Zero
-            }
-
-            override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
-                if (pullDistance > 96f && liveState !is LiveState.Loading) {
-                    refreshLive()
-                }
-                pullDistance = 0f
-                return Velocity.Zero
-            }
-        }
-    }
 
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Box(
@@ -207,8 +164,6 @@ private fun BahnpendelnApp() {
                         )
                     )
                 )
-                .nestedScroll(swipeRefreshConnection)
-                .pullRefresh(pullRefreshState)
         ) {
             Column(
                 modifier = Modifier
@@ -230,20 +185,13 @@ private fun BahnpendelnApp() {
                         if (activeStation == 0) stationOne = it else stationTwo = it
                     },
                 )
-                LineFilterCard(lines, selectedLine) { selectedLine = it }
                 DeparturesCard(
                     station = currentStation,
-                    selectedLine = selectedLine,
                     liveState = liveState,
                     onLoadLive = { loadLive() },
                 )
                 InfoCard()
             }
-            PullRefreshIndicator(
-                refreshing = liveState is LiveState.Loading,
-                state = pullRefreshState,
-                modifier = Modifier.align(Alignment.TopCenter),
-            )
         }
     }
 }
@@ -353,31 +301,8 @@ private fun EditStationCard(
 }
 
 @Composable
-private fun LineFilterCard(lines: List<String>, selectedLine: String, onSelect: (String) -> Unit) {
-    ElevatedCard(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(24.dp),
-        colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface),
-    ) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("Linienfilter", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                lines.forEach { line ->
-                    FilterChip(
-                        selected = selectedLine == line,
-                        onClick = { onSelect(line) },
-                        label = { Text(if (line == "RE/RB") "RE / RB" else line) },
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
 private fun DeparturesCard(
     station: String,
-    selectedLine: String,
     liveState: LiveState,
     onLoadLive: () -> Unit,
 ) {
@@ -389,7 +314,7 @@ private fun DeparturesCard(
         Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Pendelblick", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
             Text(
-                "${station.ifBlank { "Bitte Bahnhof eintragen" }} · ${if (selectedLine == "RE/RB") "RE / RB" else selectedLine}",
+                "${station.ifBlank { "Bitte Bahnhof eintragen" }} · RE / RB",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -403,14 +328,11 @@ private fun DeparturesCard(
                 is LiveState.Error -> Text("Fehler: ${liveState.message}", color = Color(0xFFB00020))
                 is LiveState.Ready -> {
                     val filtered = liveState.rows.filter { row ->
-                        when (selectedLine) {
-                            "Alle" -> true
-                            "RE/RB" -> row.line.uppercase(Locale.GERMAN).startsWith("RE") || row.line.uppercase(Locale.GERMAN).startsWith("RB")
-                            else -> row.line.uppercase(Locale.GERMAN).startsWith(selectedLine)
-                        }
+                        val line = row.line.uppercase(Locale.GERMAN)
+                        line.startsWith("RE") || line.startsWith("RB")
                     }
                     if (filtered.isEmpty()) {
-                        Text("Keine passenden Abfahrten gefunden.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("Keine RE/RB-Abfahrten gefunden.", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     } else {
                         filtered.take(5).forEach { departure ->
                             DepartureRow(departure)
