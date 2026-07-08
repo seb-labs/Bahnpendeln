@@ -263,7 +263,6 @@ private fun EditStationCard(
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
                 label = { Text("Bahnhof") },
-                placeholder = { Text("z. B. Weilerswist Bf") },
             )
             if (station.trim().length >= 2) {
                 Text(
