@@ -388,11 +388,16 @@ private fun DepartureRow(departure: Departure) {
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 2.dp),
-        verticalAlignment = Alignment.CenterVertically,
+        verticalAlignment = Alignment.Top,
     ) {
         Text(departureTime, fontWeight = FontWeight.Bold, modifier = Modifier.width(88.dp))
         Text(departure.line, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold, modifier = Modifier.width(58.dp))
-        Text(departure.destination.ifBlank { "Richtung unbekannt" }, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        Text(
+            departure.destination.ifBlank { "Richtung unbekannt" },
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
     }
 }
 
