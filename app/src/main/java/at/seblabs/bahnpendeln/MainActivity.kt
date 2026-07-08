@@ -407,6 +407,7 @@ private fun DepartureRow(departure: Departure) {
         Text(
             departure.destination.ifBlank { "Richtung unbekannt" },
             maxLines = 2,
+            softWrap = true,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
@@ -528,30 +529,48 @@ private suspend fun searchStations(query: String): List<StationSuggestion> = wit
 private suspend fun resolveStation(query: String): StationSuggestion {
     val candidates = searchStations(query)
     val stopCandidates = candidates.filter { it.anyType == "stop" }
-    val picked = (stopCandidates.firstOrNull() ?: candidates.firstOrNull())
-        ?: throw IllegalStateException("Keine passende Haltestelle gefunden")
+    val picked = stopCandidates.minWithOrNull(
+        compareBy<StationSuggestion> { stationSuggestionScore(it, query) }
+            .thenBy { it.label.length }
+    ) ?: candidates.firstOrNull() ?: throw IllegalStateException("Keine passende Haltestelle gefunden")
     return picked
 }
 
 private fun stationSuggestionScore(suggestion: StationSuggestion, query: String): Int {
+    val variants = stationQueryVariants(query)
     val label = normalize(suggestion.label)
     val place = normalize(suggestion.place)
+    val objectName = normalize(suggestion.label.substringAfter(", ", suggestion.label))
     return when {
-        label == query -> 0
-        label.startsWith("$query,") || label.startsWith("$query ") -> 1
-        label.contains(", $query") || label.contains(" $query") -> 2
-        place == query -> 3
-        place.startsWith(query) -> 4
+        variants.any { label == it || objectName == it } -> 0
+        variants.any { label.startsWith("$it,") || label.startsWith("$it ") || label.endsWith(", $it") || label.endsWith(" $it") } -> 1
+        variants.any { label.contains(", $it") || label.contains(" $it") || objectName.contains(it) } -> 2
+        variants.any { place == it } -> 3
+        variants.any { place.startsWith(it) || place.contains(it) } -> 4
         else -> 5
     }
 }
 
 private fun matchesStationQuery(label: String, place: String, query: String): Boolean {
+    val variants = stationQueryVariants(query)
     val labelN = normalize(label)
     val placeN = normalize(place)
-    return labelN == query || labelN.startsWith("$query,") || labelN.startsWith("$query ") ||
-        labelN.contains(", $query") || labelN.contains(" $query") ||
-        placeN == query || placeN.startsWith(query) || placeN.contains(query)
+    return variants.any { q ->
+        labelN == q || labelN.startsWith("$q,") || labelN.startsWith("$q ") ||
+            labelN.endsWith(", $q") || labelN.endsWith(" $q") ||
+            labelN.contains(", $q") || labelN.contains(" $q") ||
+            placeN == q || placeN.startsWith(q) || placeN.contains(q)
+    }
+}
+
+private fun stationQueryVariants(query: String): Set<String> {
+    val normalized = normalize(query)
+    val variants = linkedSetOf(normalized)
+    variants += normalized.replace(Regex("""\b([a-z]+)er\b(?=\s+(hbf|bf|bahnhof|hauptbahnhof)\b)"""), "$1")
+    if (normalized.contains("hauptbahnhof")) variants += normalized.replace("hauptbahnhof", "hbf")
+    if (normalized.contains("bahnhof")) variants += normalized.replace("bahnhof", "bf")
+    if (normalized.contains("hbf")) variants += normalized.replace("hbf", "hauptbahnhof")
+    return variants.filter { it.isNotBlank() }.toSet()
 }
 
 private fun normalize(value: String): String = java.text.Normalizer.normalize(value, java.text.Normalizer.Form.NFD)
