@@ -2,6 +2,7 @@
 
 package at.seblabs.bahnpendeln
 
+import android.content.Context
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -42,6 +43,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import java.net.HttpURLConnection
@@ -74,6 +76,11 @@ private val LightColors = lightColorScheme(
     onSurface = Color(0xFF152033),
     onSurfaceVariant = Color(0xFF5C667A),
 )
+
+private const val PREFS_NAME = "bahnpendeln_prefs"
+private const val KEY_STATION_ONE = "station_one"
+private const val KEY_STATION_TWO = "station_two"
+private const val KEY_ACTIVE_STATION = "active_station"
 
 private val DarkColors = darkColorScheme(
     primary = Color(0xFF7EA8FF),
@@ -117,12 +124,18 @@ private fun BahnpendelnTheme(content: @Composable () -> Unit) {
 
 @Composable
 private fun BahnpendelnApp() {
-    var stationOne by remember { mutableStateOf("") }
-    var stationTwo by remember { mutableStateOf("") }
-    var activeStation by remember { mutableStateOf(0) }
+    val context = LocalContext.current
+    val prefs = remember(context) { context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE) }
+    var stationOne by remember { mutableStateOf(prefs.getString(KEY_STATION_ONE, "") ?: "") }
+    var stationTwo by remember { mutableStateOf(prefs.getString(KEY_STATION_TWO, "") ?: "") }
+    var activeStation by remember { mutableStateOf(prefs.getInt(KEY_ACTIVE_STATION, 0)) }
     var liveState by remember { mutableStateOf<LiveState>(LiveState.Idle) }
     val scope = rememberCoroutineScope()
     val currentStation = if (activeStation == 0) stationOne else stationTwo
+
+    LaunchedEffect(stationOne) { prefs.edit().putString(KEY_STATION_ONE, stationOne).apply() }
+    LaunchedEffect(stationTwo) { prefs.edit().putString(KEY_STATION_TWO, stationTwo).apply() }
+    LaunchedEffect(activeStation) { prefs.edit().putInt(KEY_ACTIVE_STATION, activeStation).apply() }
 
     fun loadLive() {
         if (liveState is LiveState.Loading) return
