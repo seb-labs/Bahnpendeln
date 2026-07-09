@@ -6,6 +6,7 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.location.Location
+import android.location.LocationManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -158,8 +159,18 @@ private suspend fun <T> com.google.android.gms.tasks.Task<T>.awaitResult(): T = 
 
 private suspend fun getCurrentLocation(context: Context): Location? = withContext(Dispatchers.IO) {
     val client = LocationServices.getFusedLocationProviderClient(context)
-    client.getCurrentLocation(Priority.PRIORITY_BALANCED_POWER_ACCURACY, CancellationTokenSource().token)
-        .awaitResult()
+    runCatching { client.lastLocation.awaitResult() }.getOrNull()?.let { return@withContext it }
+
+    runCatching {
+        client.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, CancellationTokenSource().token).awaitResult()
+    }.getOrNull()?.let { return@withContext it }
+
+    val locationManager = context.getSystemService(LocationManager::class.java)
+    listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER, LocationManager.PASSIVE_PROVIDER)
+        .asSequence()
+        .filter { provider -> runCatching { locationManager.isProviderEnabled(provider) }.getOrDefault(false) }
+        .mapNotNull { provider -> runCatching { locationManager.getLastKnownLocation(provider) }.getOrNull() }
+        .firstOrNull()
 }
 
 @Composable
@@ -315,8 +326,8 @@ private fun StationSwitch(
     stationOne: String,
     stationTwo: String,
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
             if (activeStation == 0) {
                 Button(onClick = { onActiveStationChange(0) }, modifier = Modifier.weight(1f)) { Text("Bahnhof 1") }
                 OutlinedButton(onClick = { onActiveStationChange(1) }, modifier = Modifier.weight(1f)) { Text("Bahnhof 2") }
@@ -422,34 +433,35 @@ private fun NearbyStationsCard(
         shape = RoundedCornerShape(24.dp),
         colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
     ) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Bahnhaltestellen in der Nähe", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             Text(
-                "Standort nutzen oder manuell suchen — es werden nur Bahnhöfe mit RE/RB angezeigt.",
+                "Nur Bahnhöfe mit RE/RB, bis zu 3 Treffer.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall,
             )
             Button(onClick = onRequestNearbyStations, modifier = Modifier.fillMaxWidth()) {
-                Text(if (nearbyState is NearbyState.Loading) "Suche…" else "Bahnhaltestellen in der Nähe")
+                Text(if (nearbyState is NearbyState.Loading) "Suche…" else "In der Nähe suchen")
             }
             when (nearbyState) {
                 NearbyState.Idle -> Unit
-                NearbyState.Loading -> Text("Standort und Umgebungsbahnhöfe werden geprüft…", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                is NearbyState.Error -> Text("Fehler: ${nearbyState.message}", color = Color(0xFFB00020))
+                NearbyState.Loading -> Text("Standort wird geprüft…", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                is NearbyState.Error -> Text("Fehler: ${nearbyState.message}", color = Color(0xFFB00020), style = MaterialTheme.typography.bodySmall)
                 is NearbyState.Ready -> {
                     nearbyState.stations.forEach { station ->
                         ElevatedCard(
                             modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(18.dp),
+                            shape = RoundedCornerShape(16.dp),
                             colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface),
                         ) {
-                            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                 Text(station.label, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 if (station.place.isNotBlank()) {
-                                    Text(station.place, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(station.place, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall)
                                 }
-                                Text("${station.distanceMeters} m entfernt · RE / RB", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text("${station.distanceMeters} m · RE / RB", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
                                 station.departures.firstOrNull()?.let { first ->
-                                    Text("Nächste RE/RB: ${first.time} ${first.line} → ${first.destination}", maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                    Text("Nächster Zug: ${first.time} ${first.line} → ${first.destination}", maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall)
                                 }
                                 OutlinedButton(onClick = { onPickStation(station.label) }, modifier = Modifier.fillMaxWidth()) {
                                     Text("Übernehmen")
@@ -458,7 +470,7 @@ private fun NearbyStationsCard(
                         }
                     }
                     if (nearbyState.stations.isEmpty()) {
-                        Text("Keine RE/RB-Bahnhaltestellen in der Nähe gefunden.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("Keine passenden Haltestellen gefunden.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
@@ -554,7 +566,7 @@ private data class NearbyRailCandidate(
 )
 
 private suspend fun resolveNearbyStations(context: Context): List<NearbyStationResult> = withContext(Dispatchers.IO) {
-    val location = getCurrentLocation(context) ?: throw IllegalStateException("Standort konnte nicht ermittelt werden")
+    val location = getCurrentLocation(context) ?: throw IllegalStateException("Standort konnte nicht ermittelt werden. Bitte Standortdienste aktivieren.")
     val candidates = queryNearbyRailCandidates(location.latitude, location.longitude)
     val results = mutableListOf<NearbyStationResult>()
     val seenStationIds = mutableSetOf<String>()
