@@ -525,6 +525,7 @@ private fun DeparturesCard(
 @Composable
 private fun DepartureRow(departure: Departure) {
     val delayLabel = when {
+        departure.delay == "ohne Echtzeit" -> departure.delay
         departure.delayMinutes > 0 -> "+${departure.delayMinutes} → ${departure.actualTime}"
         departure.delayMinutes < 0 -> "${departure.delayMinutes} → ${departure.actualTime}"
         else -> "pünktlich"
@@ -738,13 +739,16 @@ private fun parseDepartures(html: String): List<Departure> {
             .ifBlank { "Linie" }
         val direction = Regex("""<div class="std3_result-description"><span class="std3_sr-only">Richtung</span>(.*?)</div>""", RegexOption.DOT_MATCHES_ALL)
             .find(chunk)?.groupValues?.getOrNull(1)?.plain().orEmpty()
-        val delayMinutes = Regex("""data-delay="(-?\d+)""").find(chunk)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
+        val delayMinutesRaw = Regex("""data-delay="(-?\d+)""").find(chunk)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
+        val hasRealtime = delayMinutesRaw > -1000
+        val delayMinutes = if (hasRealtime) delayMinutesRaw else 0
         val delay = when {
+            !hasRealtime -> "ohne Echtzeit"
             delayMinutes > 0 -> "+$delayMinutes min"
             delayMinutes < 0 -> "$delayMinutes min"
             else -> "pünktlich"
         }
-        val actual = actualDeparture(time, delayMinutes)
+        val actual = if (hasRealtime) actualDeparture(time, delayMinutesRaw) else ActualDeparture(time, timeToMinutes(time))
         Departure(
             time = time,
             actualTime = actual.time,
@@ -767,6 +771,11 @@ private fun actualDeparture(time: String, delayMinutes: Int): ActualDeparture {
     val hour = displayMinutes / 60
     val minute = displayMinutes % 60
     return ActualDeparture("%02d:%02d".format(Locale.GERMAN, hour, minute), actualMinutes)
+}
+
+private fun timeToMinutes(time: String): Int {
+    val parts = time.split(":")
+    return (parts.getOrNull(0)?.toIntOrNull() ?: 0) * 60 + (parts.getOrNull(1)?.toIntOrNull() ?: 0)
 }
 
 private suspend fun searchStations(query: String): List<StationSuggestion> = withContext(Dispatchers.IO) {
