@@ -132,7 +132,6 @@ private fun BahnpendelnApp() {
     var liveState by remember { mutableStateOf<LiveState>(LiveState.Idle) }
     val scope = rememberCoroutineScope()
     val currentStation = if (activeStation == 0) stationOne else stationTwo
-
     LaunchedEffect(stationOne) { prefs.edit().putString(KEY_STATION_ONE, stationOne).apply() }
     LaunchedEffect(stationTwo) { prefs.edit().putString(KEY_STATION_TWO, stationTwo).apply() }
     LaunchedEffect(activeStation) { prefs.edit().putInt(KEY_ACTIVE_STATION, activeStation).apply() }
@@ -161,6 +160,10 @@ private fun BahnpendelnApp() {
                     onFailure = { error -> LiveState.Error(error.message ?: "Live-Abfrage fehlgeschlagen") },
                 )
         }
+    }
+
+    LaunchedEffect(Unit) {
+        if (currentStation.isNotBlank()) loadLive()
     }
 
     val scrollState = rememberScrollState()
