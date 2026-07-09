@@ -422,6 +422,8 @@ private suspend fun fetchDepartures(stationId: String): List<Departure> = withCo
         "useAllStops" to "1",
         "includeCompleteStopSeq" to "1",
         "useRealtime" to "1",
+        "includedMeans" to "checkbox",
+        "inclMOT_0" to "1",
         "name_dm" to stationId,
         "type_dm" to "stop",
         "nameInfo_dm" to "invalid",
