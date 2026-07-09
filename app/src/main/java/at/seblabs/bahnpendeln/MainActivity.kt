@@ -271,7 +271,7 @@ private fun BahnpendelnApp() {
         nearbyExpanded = false
     }
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(activeStation) {
         if (currentStation.isNotBlank()) loadLive()
     }
 
