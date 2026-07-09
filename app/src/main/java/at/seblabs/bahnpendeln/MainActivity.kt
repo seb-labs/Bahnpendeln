@@ -2,9 +2,13 @@
 
 package at.seblabs.bahnpendeln
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
+import android.location.Location
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -33,11 +37,13 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.core.content.ContextCompat
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -46,6 +52,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.google.android.gms.location.LocationServices
+import com.google.android.gms.location.Priority
+import com.google.android.gms.tasks.CancellationTokenSource
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
@@ -59,7 +68,10 @@ import org.json.JSONObject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -120,6 +132,36 @@ sealed interface LiveState {
     data class Error(val message: String) : LiveState
 }
 
+sealed interface NearbyState {
+    data object Idle : NearbyState
+    data object Loading : NearbyState
+    data class Ready(val stations: List<NearbyStationResult>) : NearbyState
+    data class Error(val message: String) : NearbyState
+}
+
+data class NearbyStationResult(
+    val label: String,
+    val place: String,
+    val distanceMeters: Int,
+    val stationId: String,
+    val departures: List<Departure>,
+)
+
+private suspend fun <T> com.google.android.gms.tasks.Task<T>.awaitResult(): T = suspendCancellableCoroutine { cont ->
+    addOnSuccessListener { result ->
+        if (cont.isActive) cont.resume(result)
+    }
+    addOnFailureListener { error ->
+        if (cont.isActive) cont.resumeWithException(error)
+    }
+}
+
+private suspend fun getCurrentLocation(context: Context): Location? = withContext(Dispatchers.IO) {
+    val client = LocationServices.getFusedLocationProviderClient(context)
+    client.getCurrentLocation(Priority.PRIORITY_BALANCED_POWER_ACCURACY, CancellationTokenSource().token)
+        .awaitResult()
+}
+
 @Composable
 private fun BahnpendelnTheme(content: @Composable () -> Unit) {
     MaterialTheme(colorScheme = LightColors, content = content)
@@ -133,8 +175,25 @@ private fun BahnpendelnApp() {
     var stationTwo by remember { mutableStateOf(prefs.getString(KEY_STATION_TWO, "") ?: "") }
     var activeStation by remember { mutableStateOf(prefs.getInt(KEY_ACTIVE_STATION, 0)) }
     var liveState by remember { mutableStateOf<LiveState>(LiveState.Idle) }
+    var nearbyState by remember { mutableStateOf<NearbyState>(NearbyState.Idle) }
     val scope = rememberCoroutineScope()
     val currentStation = if (activeStation == 0) stationOne else stationTwo
+    val locationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted) {
+            nearbyState = NearbyState.Loading
+            scope.launch {
+                nearbyState = runCatching { resolveNearbyStations(context) }
+                    .fold(
+                        onSuccess = { NearbyState.Ready(it) },
+                        onFailure = { error -> NearbyState.Error(error.message ?: "Standortsuche fehlgeschlagen") },
+                    )
+            }
+        } else {
+            nearbyState = NearbyState.Error("Standortfreigabe wurde abgelehnt.")
+        }
+    }
     LaunchedEffect(stationOne) { prefs.edit().putString(KEY_STATION_ONE, stationOne).apply() }
     LaunchedEffect(stationTwo) { prefs.edit().putString(KEY_STATION_TWO, stationTwo).apply() }
     LaunchedEffect(activeStation) { prefs.edit().putInt(KEY_ACTIVE_STATION, activeStation).apply() }
@@ -162,6 +221,36 @@ private fun BahnpendelnApp() {
                     onSuccess = { it },
                     onFailure = { error -> LiveState.Error(error.message ?: "Live-Abfrage fehlgeschlagen") },
                 )
+        }
+    }
+
+    fun loadNearbyStations() {
+        if (nearbyState is NearbyState.Loading) return
+        nearbyState = NearbyState.Loading
+        scope.launch {
+            nearbyState = runCatching {
+                resolveNearbyStations(context)
+            }.fold(
+                onSuccess = { NearbyState.Ready(it) },
+                onFailure = { error -> NearbyState.Error(error.message ?: "Standortsuche fehlgeschlagen") },
+            )
+        }
+    }
+
+    fun requestNearbyStations() {
+        val permission = Manifest.permission.ACCESS_FINE_LOCATION
+        if (ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED) {
+            loadNearbyStations()
+        } else {
+            locationPermissionLauncher.launch(permission)
+        }
+    }
+
+    fun chooseNearbyStation(label: String) {
+        if (activeStation == 0) {
+            stationOne = label
+        } else {
+            stationTwo = label
         }
     }
 
@@ -204,12 +293,16 @@ private fun BahnpendelnApp() {
                         if (activeStation == 0) stationOne = it else stationTwo = it
                     },
                 )
+                NearbyStationsCard(
+                    nearbyState = nearbyState,
+                    onRequestNearbyStations = { requestNearbyStations() },
+                    onPickStation = { label -> chooseNearbyStation(label) },
+                )
                 DeparturesCard(
                     station = currentStation,
                     liveState = liveState,
                     onLoadLive = { loadLive() },
                 )
-                InfoCard()
             }
         }
     }
@@ -319,6 +412,61 @@ private fun EditStationCard(
 }
 
 @Composable
+private fun NearbyStationsCard(
+    nearbyState: NearbyState,
+    onRequestNearbyStations: () -> Unit,
+    onPickStation: (String) -> Unit,
+) {
+    ElevatedCard(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("Bahnhaltestellen in der Nähe", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Text(
+                "Standort nutzen oder manuell suchen — es werden nur Bahnhöfe mit RE/RB angezeigt.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Button(onClick = onRequestNearbyStations, modifier = Modifier.fillMaxWidth()) {
+                Text(if (nearbyState is NearbyState.Loading) "Suche…" else "Bahnhaltestellen in der Nähe")
+            }
+            when (nearbyState) {
+                NearbyState.Idle -> Unit
+                NearbyState.Loading -> Text("Standort und Umgebungsbahnhöfe werden geprüft…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                is NearbyState.Error -> Text("Fehler: ${nearbyState.message}", color = Color(0xFFB00020))
+                is NearbyState.Ready -> {
+                    nearbyState.stations.forEach { station ->
+                        ElevatedCard(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(18.dp),
+                            colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        ) {
+                            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text(station.label, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                if (station.place.isNotBlank()) {
+                                    Text(station.place, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                }
+                                Text("${station.distanceMeters} m entfernt · RE / RB", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                station.departures.firstOrNull()?.let { first ->
+                                    Text("Nächste RE/RB: ${first.time} ${first.line} → ${first.destination}", maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                }
+                                OutlinedButton(onClick = { onPickStation(station.label) }, modifier = Modifier.fillMaxWidth()) {
+                                    Text("Übernehmen")
+                                }
+                            }
+                        }
+                    }
+                    if (nearbyState.stations.isEmpty()) {
+                        Text("Keine RE/RB-Bahnhaltestellen in der Nähe gefunden.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun DeparturesCard(
     station: String,
     liveState: LiveState,
@@ -397,8 +545,138 @@ private fun DepartureRow(departure: Departure) {
     }
 }
 
-@Composable
-private fun InfoCard() {
+private data class NearbyRailCandidate(
+    val name: String,
+    val city: String,
+    val latitude: Double,
+    val longitude: Double,
+    val distanceMeters: Int,
+)
+
+private suspend fun resolveNearbyStations(context: Context): List<NearbyStationResult> = withContext(Dispatchers.IO) {
+    val location = getCurrentLocation(context) ?: throw IllegalStateException("Standort konnte nicht ermittelt werden")
+    val candidates = queryNearbyRailCandidates(location.latitude, location.longitude)
+    val results = mutableListOf<NearbyStationResult>()
+    val seenStationIds = mutableSetOf<String>()
+
+    for (candidate in candidates) {
+        if (results.size >= 3) break
+        val queries = buildList {
+            if (candidate.city.isNotBlank()) add("${candidate.city}, ${candidate.name}")
+            add(candidate.name)
+        }.distinct()
+
+        var resolved: StationSuggestion? = null
+        for (query in queries) {
+            resolved = try {
+                resolveStation(query)
+            } catch (_: Exception) {
+                null
+            }
+            if (resolved != null) break
+        }
+        val station = resolved ?: continue
+
+        if (!seenStationIds.add(station.id)) continue
+        val departures = try {
+            fetchDepartures(station.id)
+        } catch (_: Exception) {
+            emptyList()
+        }
+            .filter {
+                val line = it.line.uppercase(Locale.GERMAN)
+                line.startsWith("RE") || line.startsWith("RB")
+            }
+        if (departures.isNotEmpty()) {
+            results += NearbyStationResult(
+                label = station.label,
+                place = station.place,
+                distanceMeters = candidate.distanceMeters,
+                stationId = station.id,
+                departures = departures,
+            )
+        }
+    }
+
+    results.sortedBy { it.distanceMeters }.take(3)
+}
+
+private suspend fun queryNearbyRailCandidates(latitude: Double, longitude: Double): List<NearbyRailCandidate> = withContext(Dispatchers.IO) {
+    val query = """
+        [out:json][timeout:25];
+        (
+          node(around:2500,$latitude,$longitude)["railway"~"station|halt"];
+          way(around:2500,$latitude,$longitude)["railway"~"station|halt"];
+          relation(around:2500,$latitude,$longitude)["railway"~"station|halt"];
+        );
+        out center tags;
+    """.trimIndent()
+
+    val connection = URL("https://overpass-api.de/api/interpreter").openConnection() as HttpURLConnection
+    connection.requestMethod = "POST"
+    connection.connectTimeout = 12_000
+    connection.readTimeout = 12_000
+    connection.doOutput = true
+    connection.setRequestProperty("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
+    connection.setRequestProperty("User-Agent", "Bahnpendeln/0.1")
+    val postBody = "data=${enc(query)}"
+    connection.outputStream.use { it.write(postBody.toByteArray(Charsets.UTF_8)) }
+    val bytes = try {
+        val stream = if (connection.responseCode in 200..299) connection.inputStream else connection.errorStream
+        stream?.readBytes() ?: return@withContext emptyList()
+    } finally {
+        connection.disconnect()
+    }
+    val json = JSONObject(String(bytes, Charsets.UTF_8))
+    val elements = json.optJSONArray("elements") ?: return@withContext emptyList()
+    buildList {
+        for (index in 0 until elements.length()) {
+            val element = elements.optJSONObject(index) ?: continue
+            val tags = element.optJSONObject("tags") ?: continue
+            val name = tags.optString("name").trim()
+            if (name.isBlank()) continue
+            val city = firstNotBlank(
+                tags.optString("addr:city"),
+                tags.optString("city"),
+                tags.optString("municipality"),
+                tags.optString("is_in:city"),
+                tags.optString("is_in"),
+            )
+            val lat = when {
+                element.has("lat") -> element.optDouble("lat", Double.NaN)
+                element.has("center") -> element.optJSONObject("center")?.optDouble("lat", Double.NaN) ?: Double.NaN
+                else -> Double.NaN
+            }
+            val lon = when {
+                element.has("lon") -> element.optDouble("lon", Double.NaN)
+                element.has("center") -> element.optJSONObject("center")?.optDouble("lon", Double.NaN) ?: Double.NaN
+                else -> Double.NaN
+            }
+            if (lat.isNaN() || lon.isNaN()) continue
+            add(
+                NearbyRailCandidate(
+                    name = name,
+                    city = city,
+                    latitude = lat,
+                    longitude = lon,
+                    distanceMeters = haversineMeters(latitude, longitude, lat, lon),
+                )
+            )
+        }
+    }.sortedBy { it.distanceMeters }
+}
+
+private fun firstNotBlank(vararg values: String): String = values.firstOrNull { it.isNotBlank() }.orEmpty()
+
+private fun haversineMeters(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Int {
+    val earthRadius = 6_371_000.0
+    val dLat = Math.toRadians(lat2 - lat1)
+    val dLon = Math.toRadians(lon2 - lon1)
+    val a = kotlin.math.sin(dLat / 2) * kotlin.math.sin(dLat / 2) +
+        kotlin.math.cos(Math.toRadians(lat1)) * kotlin.math.cos(Math.toRadians(lat2)) *
+        kotlin.math.sin(dLon / 2) * kotlin.math.sin(dLon / 2)
+    val c = 2 * kotlin.math.atan2(kotlin.math.sqrt(a), kotlin.math.sqrt(1 - a))
+    return (earthRadius * c).toInt()
 }
 
 private suspend fun fetchDepartures(stationId: String): List<Departure> = withContext(Dispatchers.IO) {
