@@ -399,19 +399,6 @@ private fun DepartureRow(departure: Departure) {
 
 @Composable
 private fun InfoCard() {
-    ElevatedCard(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(24.dp),
-        colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-    ) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text("Hinweis", fontWeight = FontWeight.SemiBold)
-            Text(
-                "Die App öffnet ohne Start-Abfrage. Live-Daten werden nur geladen, wenn du den Button drückst.",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
 }
 
 private suspend fun fetchDepartures(stationId: String): List<Departure> = withContext(Dispatchers.IO) {
