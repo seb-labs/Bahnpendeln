@@ -50,6 +50,8 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
 import java.text.SimpleDateFormat
+import java.time.LocalTime
+import java.time.format.DateTimeFormatter
 import java.util.Date
 import java.util.Locale
 import org.json.JSONArray
@@ -92,6 +94,7 @@ private val DarkColors = darkColorScheme(
     onSurface = Color(0xFFE7ECF6),
     onSurfaceVariant = Color(0xFFB1BCD1),
 )
+
 
 data class Departure(
     val time: String,
@@ -444,15 +447,15 @@ private suspend fun fetchDepartures(stationId: String): List<Departure> = withCo
 
 private fun parseDepartures(html: String): List<Departure> {
     val rowRegex = Regex(
-        """<div class="std3_col-xs-12 std3_full-size std3_departure-line.*?data-draw-line=.*?(?=<div class="std3_col-xs-12 std3_full-size std3_departure-line|</main>|</body>|$)""",
+        """<div[^>]*class="[^"]*std3_departure-line[^"]*"[^>]*data-draw-line="[^"]+"[^>]*>(.*?)(?=<div[^>]*class="[^"]*std3_departure-line[^"]*"[^>]*data-draw-line="[^"]+"|</main>|</body>|$)""",
         setOf(RegexOption.DOT_MATCHES_ALL),
     )
     return rowRegex.findAll(html).mapNotNull { match ->
         val chunk = match.value
-        val time = Regex("""<span class="std3_time_col">(\d{1,2}:\d{2})""")
+        val time = Regex("""<span class="[^"]*std3_time_col[^"]*">(\d{1,2}:\d{2})""")
             .find(chunk)?.groupValues?.getOrNull(1) ?: return@mapNotNull null
         val line = Regex("""data-shortname="([^"]+)""").find(chunk)?.groupValues?.getOrNull(1)?.plain().orEmpty()
-            .ifBlank { Regex("""<span class="std3_mot-label">.*?</span>\s*([^<]+)</span>""", RegexOption.DOT_MATCHES_ALL).find(chunk)?.groupValues?.getOrNull(1)?.plain().orEmpty() }
+            .ifBlank { Regex("""<span class="[^"]*std3_mot-label[^"]*">.*?</span>\s*([^<]+)</span>""", RegexOption.DOT_MATCHES_ALL).find(chunk)?.groupValues?.getOrNull(1)?.plain().orEmpty() }
             .ifBlank { "Linie" }
         val direction = Regex("""<div class="std3_result-description"><span class="std3_sr-only">Richtung</span>(.*?)</div>""", RegexOption.DOT_MATCHES_ALL)
             .find(chunk)?.groupValues?.getOrNull(1)?.plain().orEmpty()
