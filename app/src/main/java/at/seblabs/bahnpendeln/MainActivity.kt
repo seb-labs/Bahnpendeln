@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -34,6 +35,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
@@ -187,6 +189,7 @@ private fun BahnpendelnApp() {
     var activeStation by remember { mutableStateOf(prefs.getInt(KEY_ACTIVE_STATION, 0)) }
     var liveState by remember { mutableStateOf<LiveState>(LiveState.Idle) }
     var nearbyState by remember { mutableStateOf<NearbyState>(NearbyState.Idle) }
+    var nearbyExpanded by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val currentStation = if (activeStation == 0) stationOne else stationTwo
     val locationPermissionLauncher = rememberLauncherForActivityResult(
@@ -194,6 +197,7 @@ private fun BahnpendelnApp() {
     ) { granted ->
         if (granted) {
             nearbyState = NearbyState.Loading
+            nearbyExpanded = true
             scope.launch {
                 nearbyState = runCatching { resolveNearbyStations(context) }
                     .fold(
@@ -237,6 +241,7 @@ private fun BahnpendelnApp() {
 
     fun loadNearbyStations() {
         if (nearbyState is NearbyState.Loading) return
+        nearbyExpanded = true
         nearbyState = NearbyState.Loading
         scope.launch {
             nearbyState = runCatching {
@@ -263,6 +268,7 @@ private fun BahnpendelnApp() {
         } else {
             stationTwo = label
         }
+        nearbyExpanded = false
     }
 
     LaunchedEffect(Unit) {
@@ -306,6 +312,8 @@ private fun BahnpendelnApp() {
                 )
                 NearbyStationsCard(
                     nearbyState = nearbyState,
+                    expanded = nearbyExpanded,
+                    onToggleExpanded = { nearbyExpanded = it },
                     onRequestNearbyStations = { requestNearbyStations() },
                     onPickStation = { label -> chooseNearbyStation(label) },
                 )
@@ -425,6 +433,8 @@ private fun EditStationCard(
 @Composable
 private fun NearbyStationsCard(
     nearbyState: NearbyState,
+    expanded: Boolean,
+    onToggleExpanded: (Boolean) -> Unit,
     onRequestNearbyStations: () -> Unit,
     onPickStation: (String) -> Unit,
 ) {
@@ -434,45 +444,67 @@ private fun NearbyStationsCard(
         colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
     ) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Bahnhaltestellen in der Nähe", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+                Text("Bahnhaltestellen in der Nähe", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                if (expanded || nearbyState is NearbyState.Ready || nearbyState is NearbyState.Error) {
+                    TextButton(onClick = { onToggleExpanded(!expanded) }, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) {
+                        Text(if (expanded) "Einklappen" else "Ausklappen")
+                    }
+                }
+            }
             Text(
                 "Nur Bahnhöfe mit RE/RB, bis zu 3 Treffer.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.bodySmall,
             )
-            Button(onClick = onRequestNearbyStations, modifier = Modifier.fillMaxWidth()) {
-                Text(if (nearbyState is NearbyState.Loading) "Suche…" else "In der Nähe suchen")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                Button(onClick = onRequestNearbyStations, modifier = Modifier.weight(1f)) {
+                    Text(if (nearbyState is NearbyState.Loading) "Suche…" else "In der Nähe suchen")
+                }
+                if (nearbyState is NearbyState.Ready && expanded) {
+                    OutlinedButton(onClick = { onToggleExpanded(false) }, modifier = Modifier.weight(1f)) {
+                        Text("Schließen")
+                    }
+                }
             }
-            when (nearbyState) {
-                NearbyState.Idle -> Unit
-                NearbyState.Loading -> Text("Standort wird geprüft…", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
-                is NearbyState.Error -> Text("Fehler: ${nearbyState.message}", color = Color(0xFFB00020), style = MaterialTheme.typography.bodySmall)
-                is NearbyState.Ready -> {
-                    nearbyState.stations.forEach { station ->
-                        ElevatedCard(
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(16.dp),
-                            colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface),
-                        ) {
-                            Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                Text(station.label, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                if (station.place.isNotBlank()) {
-                                    Text(station.place, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall)
-                                }
-                                Text("${station.distanceMeters} m · RE / RB", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
-                                station.departures.firstOrNull()?.let { first ->
-                                    Text("Nächster Zug: ${first.time} ${first.line} → ${first.destination}", maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall)
-                                }
-                                OutlinedButton(onClick = { onPickStation(station.label) }, modifier = Modifier.fillMaxWidth()) {
-                                    Text("Übernehmen")
+            if (expanded) {
+                when (nearbyState) {
+                    NearbyState.Idle -> Unit
+                    NearbyState.Loading -> Text("Standort wird geprüft…", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                    is NearbyState.Error -> Text("Fehler: ${nearbyState.message}", color = Color(0xFFB00020), style = MaterialTheme.typography.bodySmall)
+                    is NearbyState.Ready -> {
+                        nearbyState.stations.forEach { station ->
+                            ElevatedCard(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(16.dp),
+                                colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface),
+                            ) {
+                                Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    Text(station.label, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    if (station.place.isNotBlank()) {
+                                        Text(station.place, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall)
+                                    }
+                                    Text("${station.distanceMeters} m · RE / RB", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                                    station.departures.firstOrNull()?.let { first ->
+                                        Text("Nächster Zug: ${first.time} ${first.line} → ${first.destination}", maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall)
+                                    }
+                                    OutlinedButton(onClick = { onPickStation(station.label) }, modifier = Modifier.fillMaxWidth()) {
+                                        Text("Übernehmen")
+                                    }
                                 }
                             }
                         }
-                    }
-                    if (nearbyState.stations.isEmpty()) {
-                        Text("Keine passenden Haltestellen gefunden.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                        if (nearbyState.stations.isEmpty()) {
+                            Text("Keine passenden Haltestellen gefunden.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                        }
                     }
                 }
+            } else if (nearbyState is NearbyState.Ready) {
+                Text(
+                    "3 Treffer geladen. Du kannst sie jederzeit wieder ausklappen.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall,
+                )
             }
         }
     }
